@@ -2,7 +2,16 @@
 
 基于 [autoresearch](https://github.com/karpathy/autoresearch) 框架改造的 **自主 Skill 优化工具**。
 
-让 LLM Agent 自主、迭代地优化 Skill（提示词/指令文件），在保证任务通过率（`pass_rate >= 0.9`）的前提下，最小化每任务平均 Token 消耗（`avg_token_cost`）。
+使用 `opencode` 作为 agent 工具执行任务，通过迭代优化 `.agents/skills/` 下的 Skill 文件，
+在保证任务通过率（`pass_rate >= 0.9`）的前提下，最小化 Token 消耗（`avg_token_cost`）。
+
+## 核心特性
+
+- **默认使用 opencode** 作为 agent 工具执行任务
+- **任务目录结构**：`task.md` + `.agents/skills/` — 用户提前准备好
+- **支持多 Skills**：可同时优化多个 Skill 文件
+- **Token 上限**：可设置每次任务的 Token 上限，超出即判定失败
+- **API KEY 隔离**：框架自身 API KEY 与 opencode 使用的 AI 服务完全分离
 
 ## 快速开始
 
@@ -10,64 +19,67 @@
 # 1. 安装依赖
 uv sync
 
-# 2. 设置 API 密钥
-export OPENAI_API_KEY="sk-..."
+# 2. 确保 opencode 已安装并配置好 AI 服务
+# opencode 的 AI 服务由用户自行配置，框架不管
 
-# 3. 运行评估
-uv run harness.py
+# 3. 准备任务目录
+mkdir -p my-task/.agents/skills
+echo "# 你的任务描述" > my-task/task.md
+echo "# 你的 Skill" > my-task/.agents/skills/coding.md
+
+# 4. 运行评估
+uv run harness.py --task-dir ./my-task
+
+# 5. 设置 token 上限
+uv run harness.py --task-dir ./my-task --token-limit 5000
 ```
+
+## 任务目录结构
+
+```
+my-task/
+├── task.md                    # 任务描述（必须，只读）
+└── .agents/
+    └── skills/
+        ├── coding.md          # Skill A（被优化对象）
+        └── review.md          # Skill B（支持多个）
+```
+
+- `task.md`：描述要完成的任务
+- `.agents/skills/*.md`：opencode 自动加载的 Skill 文件，也是优化 Agent 唯一修改的目标
 
 ## 项目结构
 
 | 文件 | 角色 | 修改者 |
 |---|---|---|
-| `harness.py` | 任务加载、Skill 执行、质量评估（只读） | 无 |
-| `skill.md` | 被优化的 Skill 指令文件 | Agent |
+| `harness.py` | 评估框架：调用 opencode 执行任务，度量 token（只读） | 无 |
 | `program.md` | 优化 Agent 的行为指令 | 人类 |
-| `tasks/` | 固定任务集（只读） | 无 |
+| `<task-dir>/task.md` | 任务描述（只读） | 用户提前准备 |
+| `<task-dir>/.agents/skills/` | Skill 文件（被优化对象） | 优化 Agent |
 
-## 核心概念
-
-### 与原始 autoresearch 的映射
+## 与原始 autoresearch 的映射
 
 | 原始 autoresearch | Skill 优化框架 |
 |---|---|
-| `train.py`（被优化对象） | `skill.md`（被优化对象） |
+| `train.py`（被优化对象） | `.agents/skills/*.md`（被优化对象） |
 | `prepare.py`（只读基础设施） | `harness.py`（只读基础设施） |
-| `val_bpb`（越低越好） | `avg_token_cost`（越低越好） |
-| 5 分钟时间预算 | 固定任务集 |
+| `val_bpb` ↓ | `avg_token_cost` ↓ |
+| 5 分钟 GPU 时间预算 | Token 上限 / 固定任务 |
+| VRAM 约束 | `pass_rate >= 0.9` 质量门控 |
 
-### 实验循环
+## API KEY 说明
 
-```
-永久循环：
-  1. 优化 Agent 分析当前 skill.md 和历史结果
-  2. 提出优化假设，修改 skill.md
-  3. git commit
-  4. 运行评估：uv run harness.py > run.log 2>&1
-  5. 提取指标：grep "^avg_token_cost:\|^pass_rate:" run.log
-  6. pass_rate >= 0.9 且 avg_token_cost 降低 → 保留
-     否则 → git reset 回退
-  7. 记录到 results.tsv
-```
+- **框架 API KEY**（`OPENAI_API_KEY` 等）：仅用于框架自身（如 LLM 评估判断），与 opencode 无关
+- **opencode AI 服务**：由用户自行在 opencode 中配置，框架只负责调用 `opencode` 命令
 
-## 多模型支持
+## 配置
 
-```bash
-# OpenAI（默认）
-export OPENAI_API_KEY="sk-..."
-uv run harness.py --provider openai
-
-# Kimi（Moonshot）
-export KIMI_API_KEY="sk-..."
-uv run harness.py --provider kimi
-
-# 自定义提供商
-export SKILL_API_KEY="..."
-export SKILL_API_BASE="https://your-api.com/v1"
-export SKILL_MODEL_NAME="your-model"
-uv run harness.py
-```
+| 参数 | CLI 参数 | 环境变量 | 默认值 |
+|---|---|---|---|
+| Agent 命令 | `--agent` | `HARNESS_AGENT` | `opencode` |
+| Token 上限 | `--token-limit` | `HARNESS_TOKEN_LIMIT` | `0`（无限制） |
+| 超时秒数 | `--timeout` | `HARNESS_TIMEOUT` | `300` |
+| 任务目录 | `--task-dir` | — | `.`（当前目录） |
 
 ## 测试
 

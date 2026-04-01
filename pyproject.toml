@@ -1,12 +1,10 @@
 [project]
 name = "autoresearch-skill"
-version = "0.1.0"
-description = "基于 autoresearch 框架的自主 Skill 优化工具"
+version = "0.2.0"
+description = "基于 autoresearch 框架的自主 Skill 优化工具 — 通过 opencode 执行任务"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = [
-    "openai>=1.30.0",
-]
+dependencies = []
 
 [project.optional-dependencies]
 dev = [

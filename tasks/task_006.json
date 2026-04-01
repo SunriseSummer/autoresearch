@@ -1,1 +1,0 @@
-{"task_id":"logic_006","input":"If all roses are flowers and all flowers need water, do roses need water? Answer yes or no.","expected":["yes"],"evaluator":"contains","metadata":{"category":"logic","difficulty":"easy"}}

@@ -1,1 +1,0 @@
-{"task_id":"knowledge_010","input":"What programming language was created by Guido van Rossum?","expected":"Python","evaluator":"contains","metadata":{"category":"knowledge","difficulty":"easy"}}

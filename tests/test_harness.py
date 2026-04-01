@@ -1,158 +1,255 @@
-"""harness.py 的单元测试。"""
+"""harness.py 单元测试。"""
 
 import json
 import os
 import sys
 import tempfile
 
-# 将项目根目录加入 sys.path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from harness import (
-    Task,
-    ExecutionResult,
-    evaluate_quality,
-    load_tasks,
+    SkillInfo,
+    TaskResult,
+    EvaluationResult,
+    discover_skills,
+    load_task,
+    parse_token_usage,
+    check_agent_available,
+    run_task,
+    evaluate,
     PASS_THRESHOLD,
+    DEFAULT_AGENT,
+    DEFAULT_TIMEOUT,
+    DEFAULT_TOKEN_LIMIT,
 )
 
 
 # ---------------------------------------------------------------------------
-# evaluate_quality 测试
+# discover_skills 测试
 # ---------------------------------------------------------------------------
 
 
-class TestEvaluateQualityExactMatch:
-    def test_exact_match_pass(self):
-        task = Task("t1", "q", "hello world", "exact_match")
-        assert evaluate_quality(task, "hello world") is True
-
-    def test_exact_match_strip(self):
-        task = Task("t1", "q", "hello", "exact_match")
-        assert evaluate_quality(task, "  hello  ") is True
-
-    def test_exact_match_fail(self):
-        task = Task("t1", "q", "hello", "exact_match")
-        assert evaluate_quality(task, "world") is False
-
-
-class TestEvaluateQualityContains:
-    def test_contains_single_keyword(self):
-        task = Task("t1", "q", "Paris", "contains")
-        assert evaluate_quality(task, "The capital is Paris.") is True
-
-    def test_contains_case_insensitive(self):
-        task = Task("t1", "q", "paris", "contains")
-        assert evaluate_quality(task, "PARIS is the capital.") is True
-
-    def test_contains_multiple_keywords(self):
-        task = Task("t1", "q", ["Python", "Guido"], "contains")
-        assert evaluate_quality(task, "Python was created by Guido.") is True
-
-    def test_contains_missing_keyword(self):
-        task = Task("t1", "q", ["Python", "Java"], "contains")
-        assert evaluate_quality(task, "Python is great.") is False
-
-    def test_contains_empty_output(self):
-        task = Task("t1", "q", "hello", "contains")
-        assert evaluate_quality(task, "") is False
-
-
-class TestEvaluateQualityUnknown:
-    def test_unknown_evaluator_falls_back_to_contains(self):
-        task = Task("t1", "q", "hello", "unknown_eval")
-        assert evaluate_quality(task, "hello world") is True
-
-
-# ---------------------------------------------------------------------------
-# load_tasks 测试
-# ---------------------------------------------------------------------------
-
-
-class TestLoadTasks:
-    def test_load_tasks_from_dir(self):
+class TestDiscoverSkills:
+    def test_finds_skills(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            task_data = {
-                "task_id": "test_001",
-                "input": "What is 1+1?",
-                "expected": "2",
-                "evaluator": "contains",
-                "metadata": {"category": "math"},
-            }
-            with open(os.path.join(tmpdir, "task_001.json"), "w") as f:
-                json.dump(task_data, f)
+            skills_dir = os.path.join(tmpdir, ".agents", "skills")
+            os.makedirs(skills_dir)
+            for name in ["a.md", "b.md"]:
+                with open(os.path.join(skills_dir, name), "w") as f:
+                    f.write(f"# Skill {name}")
 
-            tasks = load_tasks(tmpdir)
-            assert len(tasks) == 1
-            assert tasks[0].task_id == "test_001"
-            assert tasks[0].evaluator == "contains"
+            skills = discover_skills(tmpdir)
+            assert len(skills) == 2
+            assert skills[0].name == "a.md"
+            assert skills[1].name == "b.md"
+            assert skills[0].char_count > 0
 
-    def test_load_tasks_sorted(self):
+    def test_empty_dir(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            for i in [3, 1, 2]:
-                data = {
-                    "task_id": f"t{i}",
-                    "input": f"q{i}",
-                    "expected": f"a{i}",
-                }
-                with open(os.path.join(tmpdir, f"task_{i:03d}.json"), "w") as f:
-                    json.dump(data, f)
+            skills_dir = os.path.join(tmpdir, ".agents", "skills")
+            os.makedirs(skills_dir)
+            assert discover_skills(tmpdir) == []
 
-            tasks = load_tasks(tmpdir)
-            assert [t.task_id for t in tasks] == ["t1", "t2", "t3"]
+    def test_no_skills_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            assert discover_skills(tmpdir) == []
 
-    def test_load_tasks_missing_dir(self):
-        """不存在的目录应触发 sys.exit。"""
+    def test_ignores_non_md(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skills_dir = os.path.join(tmpdir, ".agents", "skills")
+            os.makedirs(skills_dir)
+            with open(os.path.join(skills_dir, "a.md"), "w") as f:
+                f.write("skill")
+            with open(os.path.join(skills_dir, "b.txt"), "w") as f:
+                f.write("not a skill")
+
+            skills = discover_skills(tmpdir)
+            assert len(skills) == 1
+            assert skills[0].name == "a.md"
+
+
+# ---------------------------------------------------------------------------
+# load_task 测试
+# ---------------------------------------------------------------------------
+
+
+class TestLoadTask:
+    def test_loads_task_md(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with open(os.path.join(tmpdir, "task.md"), "w") as f:
+                f.write("# Test Task\nDo something.")
+
+            content = load_task(tmpdir)
+            assert "Test Task" in content
+            assert "Do something." in content
+
+    def test_missing_task_md(self):
         import pytest
-        with pytest.raises(SystemExit):
-            load_tasks("/nonexistent_dir_xyz")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with pytest.raises(SystemExit):
+                load_task(tmpdir)
 
 
 # ---------------------------------------------------------------------------
-# 任务文件完整性测试
+# parse_token_usage 测试
 # ---------------------------------------------------------------------------
 
 
-class TestTaskFiles:
-    def test_all_task_files_valid(self):
-        """验证 tasks/ 目录下所有 JSON 文件结构正确。"""
-        task_dir = os.path.join(os.path.dirname(__file__), "..", "tasks")
-        if not os.path.isdir(task_dir):
-            return  # 跳过（CI 环境可能无此目录）
+class TestParseTokenUsage:
+    def test_total_tokens_format(self):
+        assert parse_token_usage("Total Tokens: 1234") == 1234
 
-        tasks = load_tasks(task_dir)
-        assert len(tasks) == 20
+    def test_tokens_used_format(self):
+        assert parse_token_usage("tokens used: 5678") == 5678
 
-        ids = [t.task_id for t in tasks]
-        assert len(ids) == len(set(ids)), "task_id 必须唯一"
+    def test_n_tokens_total(self):
+        assert parse_token_usage("Used 999 tokens total") == 999
 
-        for t in tasks:
-            assert t.task_id, "task_id 不能为空"
-            assert t.input, "input 不能为空"
-            assert t.expected is not None, "expected 不能为 None"
-            assert t.evaluator in ("exact_match", "contains", "llm_judge")
+    def test_token_count_format(self):
+        assert parse_token_usage("token_count: 42") == 42
+
+    def test_no_match(self):
+        assert parse_token_usage("no token info here") == 0
+
+    def test_empty_string(self):
+        assert parse_token_usage("") == 0
+
+    def test_last_match_wins(self):
+        output = "Total Tokens: 100\nSome text\nTotal Tokens: 200"
+        assert parse_token_usage(output) == 200
+
+    def test_tokens_consumed(self):
+        assert parse_token_usage("Tokens consumed: 3456") == 3456
 
 
 # ---------------------------------------------------------------------------
-# ExecutionResult 数据类测试
+# check_agent_available 测试
 # ---------------------------------------------------------------------------
 
 
-class TestExecutionResult:
-    def test_default_error_is_none(self):
-        r = ExecutionResult("out", 10, 5, 15)
+class TestCheckAgentAvailable:
+    def test_python_available(self):
+        assert check_agent_available("python3") is True or \
+               check_agent_available("python") is True
+
+    def test_nonexistent_unavailable(self):
+        assert check_agent_available("nonexistent_cmd_xyz_123") is False
+
+
+# ---------------------------------------------------------------------------
+# run_task 测试
+# ---------------------------------------------------------------------------
+
+
+class TestRunTask:
+    def test_agent_not_found(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = run_task(tmpdir, "test", agent_cmd="nonexistent_cmd_xyz")
+            assert result.success is False
+            assert "未找到" in result.error
+
+    def test_successful_run(self):
+        """使用 echo 作为 agent 模拟成功执行。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = run_task(tmpdir, "hello", agent_cmd="echo", timeout=10)
+            assert result.exit_code == 0
+            assert result.success is True
+            assert result.duration_seconds > 0
+
+    def test_token_limit_exceeded(self):
+        """Token limit 超出时应判定为失败。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # echo outputs "Total Tokens: 100" which will be parsed
+            result = run_task(
+                tmpdir,
+                "Total Tokens: 100",
+                agent_cmd="echo",
+                token_limit=50,
+                timeout=10,
+            )
+            assert result.token_limit_exceeded is True
+            assert result.success is False
+
+
+# ---------------------------------------------------------------------------
+# TaskResult 数据类测试
+# ---------------------------------------------------------------------------
+
+
+class TestTaskResult:
+    def test_default_fields(self):
+        r = TaskResult(True, 100, 1.0, 0, "output")
         assert r.error is None
+        assert r.token_limit_exceeded is False
 
     def test_with_error(self):
-        r = ExecutionResult("", 0, 0, 0, error="timeout")
+        r = TaskResult(False, 0, 1.0, 1, "", error="timeout")
         assert r.error == "timeout"
 
 
 # ---------------------------------------------------------------------------
-# PASS_THRESHOLD 常量测试
+# evaluate 测试
+# ---------------------------------------------------------------------------
+
+
+class TestEvaluate:
+    def test_evaluate_with_echo(self):
+        """使用 echo 模拟评估。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create task.md
+            with open(os.path.join(tmpdir, "task.md"), "w") as f:
+                f.write("test task")
+            # Create a skill
+            skills_dir = os.path.join(tmpdir, ".agents", "skills")
+            os.makedirs(skills_dir)
+            with open(os.path.join(skills_dir, "test.md"), "w") as f:
+                f.write("# Test Skill")
+
+            result = evaluate(tmpdir, agent_cmd="echo", timeout=10, num_runs=2)
+            assert result.num_runs == 2
+            assert len(result.runs) == 2
+            assert len(result.skills) == 1
+            assert result.skills[0].name == "test.md"
+
+
+# ---------------------------------------------------------------------------
+# 示例目录完整性测试
+# ---------------------------------------------------------------------------
+
+
+class TestExampleDirectory:
+    def test_example_task_exists(self):
+        example_dir = os.path.join(os.path.dirname(__file__), "..", "example")
+        if not os.path.isdir(example_dir):
+            return  # 跳过
+
+        assert os.path.isfile(os.path.join(example_dir, "task.md"))
+        skills = discover_skills(example_dir)
+        assert len(skills) >= 1
+
+    def test_example_task_loadable(self):
+        example_dir = os.path.join(os.path.dirname(__file__), "..", "example")
+        if not os.path.isdir(example_dir):
+            return
+
+        content = load_task(example_dir)
+        assert len(content) > 0
+
+
+# ---------------------------------------------------------------------------
+# 常量测试
 # ---------------------------------------------------------------------------
 
 
 class TestConstants:
     def test_pass_threshold(self):
         assert PASS_THRESHOLD == 0.9
+
+    def test_default_agent(self):
+        assert DEFAULT_AGENT == "opencode"
+
+    def test_default_timeout(self):
+        assert DEFAULT_TIMEOUT == 300
+
+    def test_default_token_limit(self):
+        assert DEFAULT_TOKEN_LIMIT == 0

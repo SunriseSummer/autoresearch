@@ -1,62 +1,61 @@
 """
-harness.py — Skill 评估框架（对应原始项目的 prepare.py）
+harness.py — Skill 评估框架
 
-加载任务集，通过 LLM API 执行 Skill，评估质量，输出指标。
+通过 opencode（或其他 agent 工具）执行任务目录中的任务，
+评估 .agents/skills/ 下 Skill 文件的 token 消耗和任务完成质量。
 
 用法：
-    uv run harness.py                    # 使用默认配置评估 skill.md
-    uv run harness.py --skill my.md      # 评估指定 Skill 文件
-    uv run harness.py --provider kimi    # 使用 Kimi 模型
+    uv run harness.py --task-dir ./example
+    uv run harness.py --task-dir ./example --token-limit 5000
+    uv run harness.py --task-dir ./example --agent opencode --timeout 300
+    uv run harness.py --task-dir ./example --runs 3
+
+任务目录结构：
+    <task-dir>/
+    ├── task.md                    # 任务描述（必须）
+    └── .agents/
+        └── skills/
+            ├── skill_a.md         # Skill 文件（被优化对象）
+            └── skill_b.md         # 支持多个 Skills
 
 环境变量：
-    OPENAI_API_KEY      — OpenAI API 密钥
-    KIMI_API_KEY        — Kimi（Moonshot）API 密钥
-    MINIMAX_API_KEY     — Minimax API 密钥
-    SKILL_API_KEY       — 覆盖任意提供商的 API 密钥
-    SKILL_API_BASE      — 覆盖 API 基础地址
-    SKILL_MODEL_NAME    — 覆盖模型名称
+    HARNESS_AGENT           — Agent 命令（默认：opencode）
+    HARNESS_TOKEN_LIMIT     — 每次任务的 Token 上限（0 = 无限制）
+    HARNESS_TIMEOUT         — 执行超时秒数（默认：300）
+
+注意：
+    本框架配置的 API KEY 只用于框架自身（如 LLM 评估）。
+    opencode 使用的 AI 服务由用户自行配置，框架只管调用 opencode 干活。
 """
 
 import json
 import os
+import re
+import shutil
+import subprocess
 import sys
+import time
 import argparse
 from dataclasses import dataclass, field
 from typing import Optional
 
-from openai import OpenAI
-
 # ---------------------------------------------------------------------------
-# 常量定义（固定值，请勿修改）
+# 常量
 # ---------------------------------------------------------------------------
 
-TASK_DIR = "tasks"
+DEFAULT_AGENT = "opencode"
+DEFAULT_TIMEOUT = 300
+DEFAULT_TOKEN_LIMIT = 0
 PASS_THRESHOLD = 0.9
-MAX_RETRIES = 2
-TEMPERATURE = 0.0
-SEED = 42
 
-# ---------------------------------------------------------------------------
-# 模型提供商配置
-# ---------------------------------------------------------------------------
-
-PROVIDER_CONFIG = {
-    "openai": {
-        "api_base": "https://api.openai.com/v1",
-        "api_key_env": "OPENAI_API_KEY",
-        "default_model": "gpt-4o-mini",
-    },
-    "kimi": {
-        "api_base": "https://api.moonshot.cn/v1",
-        "api_key_env": "KIMI_API_KEY",
-        "default_model": "moonshot-v1-8k",
-    },
-    "minimax": {
-        "api_base": "https://api.minimax.chat/v1",
-        "api_key_env": "MINIMAX_API_KEY",
-        "default_model": "MiniMax-Text-01",
-    },
-}
+# Token 使用量匹配模式（按优先级排列，适配多种 agent 输出格式）
+TOKEN_PATTERNS = [
+    r"[Tt]otal\s*[Tt]okens?[:\s]+(\d+)",
+    r"[Tt]okens?\s*(?:used|usage|consumed)[:\s]+(\d+)",
+    r"(\d+)\s+tokens?\s+total",
+    r"tokens_used[:\s]+(\d+)",
+    r"token[_\s]?count[:\s]+(\d+)",
+]
 
 # ---------------------------------------------------------------------------
 # 数据类
@@ -64,241 +63,206 @@ PROVIDER_CONFIG = {
 
 
 @dataclass
-class Task:
-    """任务定义。"""
-    task_id: str
-    input: str
-    expected: object          # str | list[str] | dict
-    evaluator: str            # exact_match | contains | llm_judge
-    metadata: dict = field(default_factory=dict)
+class SkillInfo:
+    """Skill 文件信息。"""
+    name: str
+    path: str
+    char_count: int
 
 
 @dataclass
-class ExecutionResult:
-    """单任务执行结果。"""
+class TaskResult:
+    """单次任务执行结果。"""
+    success: bool
+    tokens_used: int
+    duration_seconds: float
+    exit_code: int
     output: str
-    prompt_tokens: int
-    completion_tokens: int
-    total_tokens: int
     error: Optional[str] = None
+    token_limit_exceeded: bool = False
+
+
+@dataclass
+class EvaluationResult:
+    """完整评估结果。"""
+    task_dir: str
+    skills: list
+    runs: list
+    avg_token_cost: float
+    pass_rate: float
+    total_tokens: int
+    total_skills_chars: int
+    num_runs: int
+    num_passed: int
 
 # ---------------------------------------------------------------------------
-# 客户端创建
-# ---------------------------------------------------------------------------
-
-
-def create_client(provider: str = "openai") -> tuple:
-    """为指定提供商创建 OpenAI 兼容客户端，返回 (client, model_name)。"""
-    api_key = os.environ.get("SKILL_API_KEY")
-    api_base = os.environ.get("SKILL_API_BASE")
-    model_name = os.environ.get("SKILL_MODEL_NAME")
-
-    config = PROVIDER_CONFIG.get(provider)
-    if config is None:
-        if not api_key or not api_base or not model_name:
-            print(
-                f"错误：未知提供商 '{provider}'，"
-                "请设置 SKILL_API_KEY、SKILL_API_BASE、SKILL_MODEL_NAME。",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-    else:
-        if api_key is None:
-            api_key = os.environ.get(config["api_key_env"], "")
-        if api_base is None:
-            api_base = config["api_base"]
-        if model_name is None:
-            model_name = config["default_model"]
-
-    client = OpenAI(api_key=api_key, base_url=api_base)
-    return client, model_name
-
-# ---------------------------------------------------------------------------
-# 任务加载器
+# Skill 发现
 # ---------------------------------------------------------------------------
 
 
-def load_tasks(task_dir: str = TASK_DIR) -> list:
-    """从 tasks/ 目录加载全部 JSON 任务。"""
-    if not os.path.isdir(task_dir):
-        print(f"错误：任务目录 '{task_dir}' 不存在。", file=sys.stderr)
+def discover_skills(task_dir: str) -> list:
+    """发现任务目录中 .agents/skills/ 下的所有 Skill 文件。"""
+    skills_dir = os.path.join(task_dir, ".agents", "skills")
+    if not os.path.isdir(skills_dir):
+        return []
+
+    skills = []
+    for filename in sorted(os.listdir(skills_dir)):
+        if filename.endswith(".md"):
+            filepath = os.path.join(skills_dir, filename)
+            char_count = len(open(filepath, "r", encoding="utf-8").read())
+            skills.append(SkillInfo(
+                name=filename,
+                path=filepath,
+                char_count=char_count,
+            ))
+    return skills
+
+# ---------------------------------------------------------------------------
+# 任务加载
+# ---------------------------------------------------------------------------
+
+
+def load_task(task_dir: str) -> str:
+    """加载任务目录中的 task.md。"""
+    task_file = os.path.join(task_dir, "task.md")
+    if not os.path.isfile(task_file):
+        print(f"错误：任务文件 '{task_file}' 不存在。", file=sys.stderr)
         sys.exit(1)
-
-    files = sorted(f for f in os.listdir(task_dir) if f.endswith(".json"))
-    if not files:
-        print(f"错误：任务目录 '{task_dir}' 中没有任务文件。", file=sys.stderr)
-        sys.exit(1)
-
-    tasks = []
-    for filename in files:
-        with open(os.path.join(task_dir, filename), "r", encoding="utf-8") as f:
-            d = json.load(f)
-        tasks.append(Task(
-            task_id=d["task_id"],
-            input=d["input"],
-            expected=d["expected"],
-            evaluator=d.get("evaluator", "contains"),
-            metadata=d.get("metadata", {}),
-        ))
-    return tasks
+    with open(task_file, "r", encoding="utf-8") as f:
+        return f.read()
 
 # ---------------------------------------------------------------------------
-# Skill 执行器
+# Token 解析
 # ---------------------------------------------------------------------------
 
 
-def execute_skill(
-    client: OpenAI,
-    model_name: str,
-    skill_content: str,
-    task: Task,
-) -> ExecutionResult:
-    """用 Skill 完成单个任务，返回 ExecutionResult。"""
+def parse_token_usage(output: str) -> int:
+    """从 agent 输出中解析 token 使用量。返回 0 如果未找到。"""
+    for pattern in TOKEN_PATTERNS:
+        matches = re.findall(pattern, output)
+        if matches:
+            return int(matches[-1])
+    return 0
+
+# ---------------------------------------------------------------------------
+# Agent 可用性检查
+# ---------------------------------------------------------------------------
+
+
+def check_agent_available(agent_cmd: str) -> bool:
+    """检查 agent 命令是否在 PATH 中可用。"""
+    return shutil.which(agent_cmd) is not None
+
+# ---------------------------------------------------------------------------
+# 任务执行
+# ---------------------------------------------------------------------------
+
+
+def run_task(
+    task_dir: str,
+    task_content: str,
+    agent_cmd: str = DEFAULT_AGENT,
+    token_limit: int = DEFAULT_TOKEN_LIMIT,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> TaskResult:
+    """
+    使用 agent 工具执行一次任务。
+
+    agent 在 task_dir 中运行，自动加载 .agents/skills/ 下的 Skill 文件。
+    """
+    start_time = time.time()
+
     try:
-        resp = client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": skill_content},
-                {"role": "user", "content": task.input},
-            ],
-            temperature=TEMPERATURE,
-            seed=SEED,
+        process = subprocess.run(
+            [agent_cmd, "-m", task_content],
+            cwd=task_dir,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
         )
-        usage = resp.usage
-        return ExecutionResult(
-            output=resp.choices[0].message.content or "",
-            prompt_tokens=usage.prompt_tokens,
-            completion_tokens=usage.completion_tokens,
-            total_tokens=usage.total_tokens,
+
+        duration = time.time() - start_time
+        combined = (process.stdout or "") + "\n" + (process.stderr or "")
+        tokens = parse_token_usage(combined)
+
+        success = process.returncode == 0
+        exceeded = token_limit > 0 and tokens > token_limit
+        if exceeded:
+            success = False
+
+        return TaskResult(
+            success=success,
+            tokens_used=tokens,
+            duration_seconds=duration,
+            exit_code=process.returncode,
+            output=process.stdout or "",
+            error=process.stderr if process.returncode != 0 else None,
+            token_limit_exceeded=exceeded,
         )
+
+    except subprocess.TimeoutExpired:
+        return TaskResult(
+            success=False, tokens_used=0,
+            duration_seconds=time.time() - start_time,
+            exit_code=-1, output="",
+            error=f"超时：执行超过 {timeout} 秒",
+        )
+
+    except FileNotFoundError:
+        return TaskResult(
+            success=False, tokens_used=0,
+            duration_seconds=time.time() - start_time,
+            exit_code=-1, output="",
+            error=f"agent 命令 '{agent_cmd}' 未找到，请确认已安装",
+        )
+
     except Exception as exc:
-        return ExecutionResult(
-            output="", prompt_tokens=0,
-            completion_tokens=0, total_tokens=0,
+        return TaskResult(
+            success=False, tokens_used=0,
+            duration_seconds=time.time() - start_time,
+            exit_code=-1, output="",
             error=str(exc),
         )
 
 # ---------------------------------------------------------------------------
-# 质量评估器
+# 核心评估
 # ---------------------------------------------------------------------------
 
 
-def evaluate_quality(
-    task: Task,
-    output: str,
-    client: Optional[OpenAI] = None,
-    model_name: Optional[str] = None,
-) -> bool:
-    """评估任务完成质量（通过/不通过）。"""
-    ev = task.evaluator
+def evaluate(
+    task_dir: str,
+    agent_cmd: str = DEFAULT_AGENT,
+    token_limit: int = DEFAULT_TOKEN_LIMIT,
+    timeout: int = DEFAULT_TIMEOUT,
+    num_runs: int = 1,
+) -> EvaluationResult:
+    """在任务目录上评估当前 Skills，返回评估结果。"""
+    task_content = load_task(task_dir)
+    skills = discover_skills(task_dir)
 
-    if ev == "exact_match":
-        return isinstance(task.expected, str) and output.strip() == task.expected.strip()
+    runs = []
+    for _ in range(num_runs):
+        result = run_task(task_dir, task_content, agent_cmd, token_limit, timeout)
+        runs.append(result)
 
-    if ev == "contains":
-        keywords = (
-            [task.expected] if isinstance(task.expected, str) else
-            task.expected if isinstance(task.expected, list) else []
-        )
-        low = output.lower()
-        return all(k.lower() in low for k in keywords)
+    num_passed = sum(1 for r in runs if r.success)
+    total_tokens = sum(r.tokens_used for r in runs)
+    avg_cost = total_tokens / num_runs if num_runs > 0 else 0
+    pass_rate = num_passed / num_runs if num_runs > 0 else 0
+    total_chars = sum(s.char_count for s in skills)
 
-    if ev == "llm_judge":
-        if client is None or model_name is None:
-            # 降级
-            return evaluate_quality(
-                Task(task.task_id, task.input, task.expected,
-                     "contains", task.metadata),
-                output,
-            )
-        judge_prompt = (
-            "You are an evaluation judge. Determine if the response "
-            "correctly addresses the task.\n\n"
-            f"Task: {task.input}\n\nExpected: {task.expected}\n\n"
-            f"Response: {output}\n\n"
-            "Reply with exactly 'PASS' or 'FAIL'."
-        )
-        try:
-            r = client.chat.completions.create(
-                model=model_name,
-                messages=[{"role": "user", "content": judge_prompt}],
-                temperature=0.0, seed=SEED,
-            )
-            return "PASS" in (r.choices[0].message.content or "").upper()
-        except Exception:
-            return False
-
-    # 未知评估器 → 降级
-    return evaluate_quality(
-        Task(task.task_id, task.input, task.expected,
-             "contains", task.metadata),
-        output,
+    return EvaluationResult(
+        task_dir=task_dir,
+        skills=skills,
+        runs=runs,
+        avg_token_cost=avg_cost,
+        pass_rate=pass_rate,
+        total_tokens=total_tokens,
+        total_skills_chars=total_chars,
+        num_runs=num_runs,
+        num_passed=num_passed,
     )
-
-# ---------------------------------------------------------------------------
-# 核心评估函数
-# ---------------------------------------------------------------------------
-
-
-def evaluate_skill(
-    skill_path: str,
-    client: OpenAI,
-    model_name: str,
-    task_dir: str = TASK_DIR,
-) -> dict:
-    """在完整任务集上评估 Skill，返回指标字典。"""
-    with open(skill_path, "r", encoding="utf-8") as f:
-        skill_content = f.read()
-
-    tasks = load_tasks(task_dir)
-    num_tasks = len(tasks)
-
-    per_task_results = []
-    tot_prompt = tot_comp = tot_all = num_passed = 0
-
-    for task in tasks:
-        result = None
-        passed = False
-        for attempt in range(MAX_RETRIES + 1):
-            result = execute_skill(client, model_name, skill_content, task)
-            if result.error is None:
-                passed = evaluate_quality(task, result.output, client, model_name)
-                if passed:
-                    break
-            elif attempt >= MAX_RETRIES:
-                break
-
-        if result is None:
-            result = ExecutionResult("", 0, 0, 0, "max retries exceeded")
-
-        tot_prompt += result.prompt_tokens
-        tot_comp += result.completion_tokens
-        tot_all += result.total_tokens
-        if passed:
-            num_passed += 1
-        per_task_results.append({
-            "task_id": task.task_id,
-            "passed": passed,
-            "prompt_tokens": result.prompt_tokens,
-            "completion_tokens": result.completion_tokens,
-            "total_tokens": result.total_tokens,
-            "error": result.error,
-        })
-
-    avg_cost = tot_all / num_tasks if num_tasks else 0
-    pass_rate = num_passed / num_tasks if num_tasks else 0
-
-    return {
-        "avg_token_cost": avg_cost,
-        "pass_rate": pass_rate,
-        "total_tokens": tot_all,
-        "total_prompt_tokens": tot_prompt,
-        "total_completion_tokens": tot_comp,
-        "num_tasks": num_tasks,
-        "num_passed": num_passed,
-        "skill_length": len(skill_content),
-        "per_task_results": per_task_results,
-    }
 
 # ---------------------------------------------------------------------------
 # 主入口
@@ -306,29 +270,90 @@ def evaluate_skill(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="评估 Skill 效果")
-    parser.add_argument("--skill", default="skill.md", help="Skill 文件路径")
-    parser.add_argument("--task-dir", default=TASK_DIR, help="任务目录")
-    parser.add_argument("--provider", default="openai",
-                        help="模型提供商: openai / kimi / minimax")
+    parser = argparse.ArgumentParser(description="Skill 评估框架 — 通过 opencode 执行任务")
+    parser.add_argument(
+        "--task-dir", default=".",
+        help="任务目录路径（包含 task.md 和 .agents/skills/）",
+    )
+    parser.add_argument(
+        "--agent", default=None,
+        help=f"Agent 命令（默认：{DEFAULT_AGENT}，可通过 HARNESS_AGENT 环境变量设置）",
+    )
+    parser.add_argument(
+        "--token-limit", type=int, default=None,
+        help="每次任务的 Token 上限，超过判定失败（0=无限制）",
+    )
+    parser.add_argument(
+        "--timeout", type=int, default=None,
+        help=f"执行超时秒数（默认：{DEFAULT_TIMEOUT}）",
+    )
+    parser.add_argument(
+        "--runs", type=int, default=1,
+        help="评估运行次数（默认：1）",
+    )
     args = parser.parse_args()
 
-    if not os.path.isfile(args.skill):
-        print(f"错误：Skill 文件 '{args.skill}' 不存在。", file=sys.stderr)
+    # 配置优先级：CLI > 环境变量 > 默认值
+    agent_cmd = (
+        args.agent
+        or os.environ.get("HARNESS_AGENT", DEFAULT_AGENT)
+    )
+    token_limit = (
+        args.token_limit if args.token_limit is not None
+        else int(os.environ.get("HARNESS_TOKEN_LIMIT", DEFAULT_TOKEN_LIMIT))
+    )
+    timeout = (
+        args.timeout if args.timeout is not None
+        else int(os.environ.get("HARNESS_TIMEOUT", DEFAULT_TIMEOUT))
+    )
+    task_dir = os.path.abspath(args.task_dir)
+
+    # 验证任务目录
+    if not os.path.isdir(task_dir):
+        print(f"错误：任务目录 '{task_dir}' 不存在。", file=sys.stderr)
+        sys.exit(1)
+    if not os.path.isfile(os.path.join(task_dir, "task.md")):
+        print(f"错误：'{task_dir}/task.md' 不存在。", file=sys.stderr)
         sys.exit(1)
 
-    client, model_name = create_client(args.provider)
-    r = evaluate_skill(args.skill, client, model_name, args.task_dir)
+    # 信息提示
+    skills_dir = os.path.join(task_dir, ".agents", "skills")
+    if not os.path.isdir(skills_dir):
+        print(f"警告：Skills 目录 '{skills_dir}' 不存在。", file=sys.stderr)
+    if not check_agent_available(agent_cmd):
+        print(f"警告：agent 命令 '{agent_cmd}' 未在 PATH 中找到。", file=sys.stderr)
 
+    # 执行评估
+    result = evaluate(task_dir, agent_cmd, token_limit, timeout, args.runs)
+
+    # 输出指标
     print("---")
-    print(f"avg_token_cost:    {r['avg_token_cost']:.1f}")
-    print(f"pass_rate:         {r['pass_rate']:.4f}")
-    print(f"total_tokens:      {r['total_tokens']}")
-    print(f"prompt_tokens:     {r['total_prompt_tokens']}")
-    print(f"completion_tokens: {r['total_completion_tokens']}")
-    print(f"num_tasks:         {r['num_tasks']}")
-    print(f"num_passed:        {r['num_passed']}")
-    print(f"skill_length:      {r['skill_length']}")
+    print(f"task_dir:           {result.task_dir}")
+    print(f"agent:              {agent_cmd}")
+    print(f"num_skills:         {len(result.skills)}")
+    print(f"skills_total_chars: {result.total_skills_chars}")
+    for s in result.skills:
+        print(f"  skill: {s.name} ({s.char_count} chars)")
+    print(f"avg_token_cost:     {result.avg_token_cost:.1f}")
+    print(f"pass_rate:          {result.pass_rate:.4f}")
+    print(f"total_tokens:       {result.total_tokens}")
+    print(f"num_runs:           {result.num_runs}")
+    print(f"num_passed:         {result.num_passed}")
+    print(f"token_limit:        {token_limit}")
+    print(f"timeout:            {timeout}")
+
+    for i, run in enumerate(result.runs):
+        status = "PASS" if run.success else "FAIL"
+        extra = ""
+        if run.token_limit_exceeded:
+            extra = " [TOKEN_LIMIT_EXCEEDED]"
+        if run.error:
+            extra += f" [{run.error[:80]}]"
+        print(
+            f"  run_{i+1}: {status}"
+            f" tokens={run.tokens_used}"
+            f" duration={run.duration_seconds:.1f}s{extra}"
+        )
 
 
 if __name__ == "__main__":
