@@ -4,7 +4,7 @@
 
 ### 1.1 原始 autoresearch 项目
 
-autoresearch 是 Karpathy 开发的自主 AI 研究框架，核心思路是：让 LLM Agent 自主、迭代地修改 GPT 训练代码（`train.py`），每次实验在固定 5 分钟时间预算内运行，根据验证指标（`val_bpb`）决定保留还是回退改动。整个循环无需人工干预，可以在人类睡觉时持续运行约 100 次实验。
+autoresearch 是 Karpathy 开发的自主 AI 研究框架，核心思路是：让 LLM Agent 自主、迭代地修改 GPT 训练代码（`train.py`），每次实验在固定 5 分钟时间预算内运行，根据验证集 bits-per-byte 指标（`val_bpb`，越低越好）决定保留还是回退改动。整个循环无需人工干预，可以在人类睡觉时持续运行约 100 次实验。
 
 项目的三个核心文件：
 
@@ -123,7 +123,7 @@ autoresearch-skill/
 ```python
 # 评估配置（对应 prepare.py 中的 MAX_SEQ_LEN、EVAL_TOKENS 等）
 TASK_DIR = "tasks"                    # 任务集目录
-PASS_THRESHOLD = 0.9                  # 质量门槛：通过率不低于 90%
+PASS_THRESHOLD = 0.9                  # 质量门槛: 通过率不低于 90%
 MAX_RETRIES = 2                       # 单任务最大重试次数
 MODEL_NAME = "gpt-4o-mini"            # 执行 Agent 使用的模型
 TEMPERATURE = 0.0                     # 生成温度（保证可复现性）
@@ -208,7 +208,7 @@ print(f"avg_token_cost:   {avg_token_cost:.1f}")
 print(f"pass_rate:        {pass_rate:.4f}")
 print(f"total_tokens:     {total_tokens}")
 print(f"prompt_tokens:    {total_prompt_tokens}")
-print(f"completion_tokens:{total_completion_tokens}")
+print(f"completion_tokens: {total_completion_tokens}")
 print(f"num_tasks:        {num_tasks}")
 print(f"num_passed:       {num_passed}")
 print(f"skill_length:     {skill_char_count}")
@@ -311,7 +311,7 @@ d4e5f6g	710.0	0.9500	keep	优化 few-shot 示例
 
 ```
 avg_token_cost = total_tokens / num_tasks
-total_tokens = Σ (prompt_tokens_i + completion_tokens_i)  对每个任务 i
+total_tokens = Σ (prompt_tokens_i + completion_tokens_i)   对每个任务 i
 ```
 
 这对应原始项目中的 `val_bpb`，是优化目标。
