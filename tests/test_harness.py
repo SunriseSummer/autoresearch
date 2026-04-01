@@ -129,8 +129,8 @@ class TestParseTokenUsage:
 
 class TestCheckAgentAvailable:
     def test_python_available(self):
-        assert check_agent_available("python3") is True or \
-               check_agent_available("python") is True
+        assert (check_agent_available("python3") is True
+                or check_agent_available("python") is True)
 
     def test_nonexistent_unavailable(self):
         assert check_agent_available("nonexistent_cmd_xyz_123") is False

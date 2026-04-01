@@ -110,7 +110,8 @@ def discover_skills(task_dir: str) -> list:
     for filename in sorted(os.listdir(skills_dir)):
         if filename.endswith(".md"):
             filepath = os.path.join(skills_dir, filename)
-            char_count = len(open(filepath, "r", encoding="utf-8").read())
+            with open(filepath, "r", encoding="utf-8") as f:
+                char_count = len(f.read())
             skills.append(SkillInfo(
                 name=filename,
                 path=filepath,
