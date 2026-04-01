@@ -17,6 +17,7 @@ from harness import (
     check_agent_available,
     run_task,
     evaluate,
+    _is_excluded,
     PASS_THRESHOLD,
     DEFAULT_AGENT,
     DEFAULT_TIMEOUT,
@@ -66,6 +67,92 @@ class TestDiscoverSkills:
             skills = discover_skills(tmpdir)
             assert len(skills) == 1
             assert skills[0].name == "a.md"
+
+    def test_recursive_discovery(self):
+        """递归发现子目录中的 .md 文件。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skills_dir = os.path.join(tmpdir, ".agents", "skills")
+            os.makedirs(os.path.join(skills_dir, "sub1"))
+            os.makedirs(os.path.join(skills_dir, "sub2", "deep"))
+
+            with open(os.path.join(skills_dir, "top.md"), "w") as f:
+                f.write("top level")
+            with open(os.path.join(skills_dir, "sub1", "SKILL.md"), "w") as f:
+                f.write("sub1 skill")
+            with open(os.path.join(skills_dir, "sub2", "deep", "helper.md"), "w") as f:
+                f.write("deep nested skill")
+
+            skills = discover_skills(tmpdir)
+            assert len(skills) == 3
+            names = [s.name for s in skills]
+            assert "top.md" in names
+            assert os.path.join("sub1", "SKILL.md") in names
+            assert os.path.join("sub2", "deep", "helper.md") in names
+
+    def test_recursive_sorted_output(self):
+        """递归发现结果按路径排序。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skills_dir = os.path.join(tmpdir, ".agents", "skills")
+            os.makedirs(os.path.join(skills_dir, "b_dir"))
+            os.makedirs(os.path.join(skills_dir, "a_dir"))
+
+            with open(os.path.join(skills_dir, "z.md"), "w") as f:
+                f.write("z")
+            with open(os.path.join(skills_dir, "a_dir", "x.md"), "w") as f:
+                f.write("x")
+            with open(os.path.join(skills_dir, "b_dir", "y.md"), "w") as f:
+                f.write("y")
+
+            skills = discover_skills(tmpdir)
+            names = [s.name for s in skills]
+            assert names == sorted(names)
+
+
+# ---------------------------------------------------------------------------
+# _is_excluded / exclude_patterns 测试
+# ---------------------------------------------------------------------------
+
+
+class TestExcludePatterns:
+    def test_exclude_by_filename(self):
+        assert _is_excluded("legacy.md", ["legacy.md"]) is True
+
+    def test_exclude_by_directory_glob(self):
+        assert _is_excluded("vendor/shared.md", ["vendor/*"]) is True
+
+    def test_exclude_nested_in_directory(self):
+        assert _is_excluded("vendor/sub/deep.md", ["vendor/*"]) is True
+
+    def test_no_exclude(self):
+        assert _is_excluded("coding.md", ["vendor/*"]) is False
+
+    def test_exclude_pattern_with_wildcard(self):
+        assert _is_excluded("sub/SKILL.md", ["*/SKILL.md"]) is True
+
+    def test_empty_patterns(self):
+        assert _is_excluded("any.md", []) is False
+
+    def test_discover_with_exclude(self):
+        """discover_skills 配合排除模式。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skills_dir = os.path.join(tmpdir, ".agents", "skills")
+            os.makedirs(os.path.join(skills_dir, "vendor"))
+
+            with open(os.path.join(skills_dir, "coding.md"), "w") as f:
+                f.write("coding skill")
+            with open(os.path.join(skills_dir, "vendor", "shared.md"), "w") as f:
+                f.write("vendor skill")
+            with open(os.path.join(skills_dir, "legacy.md"), "w") as f:
+                f.write("legacy skill")
+
+            # 不排除
+            all_skills = discover_skills(tmpdir)
+            assert len(all_skills) == 3
+
+            # 排除 vendor 目录和 legacy.md
+            filtered = discover_skills(tmpdir, exclude_patterns=["vendor/*", "legacy.md"])
+            assert len(filtered) == 1
+            assert filtered[0].name == "coding.md"
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +313,18 @@ class TestExampleDirectory:
         assert os.path.isfile(os.path.join(example_dir, "task.md"))
         skills = discover_skills(example_dir)
         assert len(skills) >= 1
+
+    def test_example_has_nested_skills(self):
+        """示例目录包含多层级 Skill 文件。"""
+        example_dir = os.path.join(os.path.dirname(__file__), "..", "example")
+        if not os.path.isdir(example_dir):
+            return
+
+        skills = discover_skills(example_dir)
+        names = [s.name for s in skills]
+        # 应包含顶层和子目录中的 skill
+        assert any("/" in n or os.sep in n for n in names), \
+            f"示例目录应包含子目录中的 Skill，实际: {names}"
 
     def test_example_task_loadable(self):
         example_dir = os.path.join(os.path.dirname(__file__), "..", "example")

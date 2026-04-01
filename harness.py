@@ -2,32 +2,40 @@
 harness.py — Skill 评估框架
 
 通过 opencode（或其他 agent 工具）执行任务目录中的任务，
-评估 .agents/skills/ 下 Skill 文件的 token 消耗和任务完成质量。
+评估 .agents/skills/ 下各层目录中 Skill 文件的 token 消耗和任务完成质量。
 
 用法：
     uv run harness.py --task-dir ./example
     uv run harness.py --task-dir ./example --token-limit 5000
     uv run harness.py --task-dir ./example --agent opencode --timeout 300
     uv run harness.py --task-dir ./example --runs 3
+    uv run harness.py --task-dir ./example --exclude-skills "vendor/*" "legacy.md"
 
 任务目录结构：
     <task-dir>/
     ├── task.md                    # 任务描述（必须）
     └── .agents/
         └── skills/
-            ├── skill_a.md         # Skill 文件（被优化对象）
-            └── skill_b.md         # 支持多个 Skills
+            ├── coding.md          # Skill 文件（被优化对象）
+            ├── review/
+            │   └── SKILL.md       # 子目录中的 Skill
+            └── vendor/
+                └── shared.md      # 可通过 --exclude-skills 排除
 
 环境变量：
     HARNESS_AGENT           — Agent 命令（默认：opencode）
     HARNESS_TOKEN_LIMIT     — 每次任务的 Token 上限（0 = 无限制）
     HARNESS_TIMEOUT         — 执行超时秒数（默认：300）
+    HARNESS_EXCLUDE_SKILLS  — 排除的 Skill 路径模式（逗号分隔）
 
 注意：
     本框架配置的 API KEY 只用于框架自身（如 LLM 评估）。
     opencode 使用的 AI 服务由用户自行配置，框架只管调用 opencode 干活。
+
+    排除（--exclude-skills）仅影响本工具的优化跟踪，不影响 opencode 的加载机制。
 """
 
+import fnmatch
 import json
 import os
 import re
@@ -100,24 +108,69 @@ class EvaluationResult:
 # ---------------------------------------------------------------------------
 
 
-def discover_skills(task_dir: str) -> list:
-    """发现任务目录中 .agents/skills/ 下的所有 Skill 文件。"""
+def discover_skills(
+    task_dir: str,
+    exclude_patterns: Optional[list] = None,
+) -> list:
+    """发现任务目录中 .agents/skills/ 下各层目录中的所有 Skill (.md) 文件。
+
+    递归扫描 .agents/skills/ 的全部子目录。
+    exclude_patterns 中的 glob 模式用于排除不需要优化的文件/目录
+    （不影响 opencode 的加载机制，仅影响本工具的跟踪范围）。
+
+    模式匹配基于相对于 .agents/skills/ 的路径，例如：
+        "vendor/*"     — 排除 vendor 目录下所有文件
+        "legacy.md"    — 排除名为 legacy.md 的文件
+        "*/SKILL.md"   — 排除所有子目录中的 SKILL.md
+    """
     skills_dir = os.path.join(task_dir, ".agents", "skills")
     if not os.path.isdir(skills_dir):
         return []
 
+    if exclude_patterns is None:
+        exclude_patterns = []
+
     skills = []
-    for filename in sorted(os.listdir(skills_dir)):
-        if filename.endswith(".md"):
-            filepath = os.path.join(skills_dir, filename)
+    for dirpath, _dirnames, filenames in os.walk(skills_dir):
+        for filename in sorted(filenames):
+            if not filename.endswith(".md"):
+                continue
+            filepath = os.path.join(dirpath, filename)
+            # 计算相对于 skills_dir 的路径，用于排除匹配
+            rel_path = os.path.relpath(filepath, skills_dir)
+            if _is_excluded(rel_path, exclude_patterns):
+                continue
             with open(filepath, "r", encoding="utf-8") as f:
                 char_count = len(f.read())
             skills.append(SkillInfo(
-                name=filename,
+                name=rel_path,
                 path=filepath,
                 char_count=char_count,
             ))
+    # 按相对路径排序，确保输出稳定
+    skills.sort(key=lambda s: s.name)
     return skills
+
+
+def _is_excluded(rel_path: str, patterns: list) -> bool:
+    """检查相对路径是否匹配任一排除模式。"""
+    # 规范化路径分隔符为 /
+    normalized = rel_path.replace(os.sep, "/")
+    for pattern in patterns:
+        pattern = pattern.replace(os.sep, "/")
+        # 匹配完整路径
+        if fnmatch.fnmatch(normalized, pattern):
+            return True
+        # 匹配文件名部分
+        if fnmatch.fnmatch(os.path.basename(normalized), pattern):
+            return True
+        # 匹配路径中任一层级前缀（支持 "vendor/*" 匹配 "vendor/sub/file.md"）
+        parts = normalized.split("/")
+        for i in range(len(parts)):
+            partial = "/".join(parts[:i + 1])
+            if fnmatch.fnmatch(partial, pattern):
+                return True
+    return False
 
 # ---------------------------------------------------------------------------
 # 任务加载
@@ -237,10 +290,11 @@ def evaluate(
     token_limit: int = DEFAULT_TOKEN_LIMIT,
     timeout: int = DEFAULT_TIMEOUT,
     num_runs: int = 1,
+    exclude_patterns: Optional[list] = None,
 ) -> EvaluationResult:
     """在任务目录上评估当前 Skills，返回评估结果。"""
     task_content = load_task(task_dir)
-    skills = discover_skills(task_dir)
+    skills = discover_skills(task_dir, exclude_patterns=exclude_patterns)
 
     runs = []
     for _ in range(num_runs):
@@ -292,6 +346,12 @@ def main():
         "--runs", type=int, default=1,
         help="评估运行次数（默认：1）",
     )
+    parser.add_argument(
+        "--exclude-skills", nargs="*", default=None,
+        help="排除的 Skill 路径模式（相对于 .agents/skills/，支持 glob）。"
+             "仅影响本工具的跟踪，不影响 opencode 加载。"
+             "例如：--exclude-skills 'vendor/*' 'legacy.md'",
+    )
     args = parser.parse_args()
 
     # 配置优先级：CLI > 环境变量 > 默认值
@@ -309,6 +369,13 @@ def main():
     )
     task_dir = os.path.abspath(args.task_dir)
 
+    # 排除模式：CLI > 环境变量
+    exclude_patterns = args.exclude_skills
+    if exclude_patterns is None:
+        env_exclude = os.environ.get("HARNESS_EXCLUDE_SKILLS", "")
+        if env_exclude.strip():
+            exclude_patterns = [p.strip() for p in env_exclude.split(",") if p.strip()]
+
     # 验证任务目录
     if not os.path.isdir(task_dir):
         print(f"错误：任务目录 '{task_dir}' 不存在。", file=sys.stderr)
@@ -325,12 +392,17 @@ def main():
         print(f"警告：agent 命令 '{agent_cmd}' 未在 PATH 中找到。", file=sys.stderr)
 
     # 执行评估
-    result = evaluate(task_dir, agent_cmd, token_limit, timeout, args.runs)
+    result = evaluate(
+        task_dir, agent_cmd, token_limit, timeout, args.runs,
+        exclude_patterns=exclude_patterns,
+    )
 
     # 输出指标
     print("---")
     print(f"task_dir:           {result.task_dir}")
     print(f"agent:              {agent_cmd}")
+    if exclude_patterns:
+        print(f"exclude_skills:     {', '.join(exclude_patterns)}")
     print(f"num_skills:         {len(result.skills)}")
     print(f"skills_total_chars: {result.total_skills_chars}")
     for s in result.skills:

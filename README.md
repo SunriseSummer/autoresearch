@@ -41,12 +41,17 @@ my-task/
 ├── task.md                    # 任务描述（必须，只读）
 └── .agents/
     └── skills/
-        ├── coding.md          # Skill A（被优化对象）
-        └── review.md          # Skill B（支持多个）
+        ├── coding.md          # 顶层 Skill（被优化对象）
+        ├── review/
+        │   └── SKILL.md       # 子目录中的 Skill
+        └── vendor/
+            └── shared.md      # 可通过 --exclude-skills 排除
 ```
 
 - `task.md`：描述要完成的任务
-- `.agents/skills/*.md`：opencode 自动加载的 Skill 文件，也是优化 Agent 唯一修改的目标
+- `.agents/skills/` 下各层目录中的 `.md` 文件：opencode 自动加载的 Skill 文件，也是优化 Agent 唯一修改的目标
+- 框架递归扫描 `.agents/skills/` 全部子目录，发现所有 `.md` 文件
+- 可通过 `--exclude-skills` 排除不需要优化的文件/目录（不影响 opencode 的加载机制）
 
 ## 项目结构
 
@@ -80,6 +85,7 @@ my-task/
 | Token 上限 | `--token-limit` | `HARNESS_TOKEN_LIMIT` | `0`（无限制） |
 | 超时秒数 | `--timeout` | `HARNESS_TIMEOUT` | `300` |
 | 任务目录 | `--task-dir` | — | `.`（当前目录） |
+| 排除 Skills | `--exclude-skills` | `HARNESS_EXCLUDE_SKILLS`（逗号分隔） | 无 |
 
 ## 测试
 

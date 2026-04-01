@@ -22,7 +22,7 @@
 每次实验通过 `uv run harness.py --task-dir <path>` 运行评估。
 
 **可以修改的内容：**
-- `<task-dir>/.agents/skills/*.md` — 这是你唯一编辑的文件。指令内容、结构、措辞、示例都可以调整。支持多个 Skill 文件。
+- `<task-dir>/.agents/skills/` 下各层目录中的 `.md` 文件 — 这是你唯一编辑的文件。指令内容、结构、措辞、示例都可以调整。支持多个 Skill 文件和子目录。
 
 **不可修改的内容：**
 - `harness.py` — 只读，包含任务执行和评估逻辑。
@@ -88,8 +88,8 @@ commitavg_token_costpass_ratestatusdescription
 LOOP FOREVER:
 
 1. 查看当前 git 状态（分支/commit）
-2. 分析当前 `.agents/skills/` 和历史 results.tsv，提出优化假设
-3. 修改 Skill 文件（`.agents/skills/*.md`）
+2. 分析当前 `.agents/skills/` 各层目录中的 Skill 文件和历史 results.tsv，提出优化假设
+3. 修改 Skill 文件（`.agents/skills/` 下各层目录中的 `.md` 文件）
 4. git commit
 5. 运行评估：`uv run harness.py --task-dir <path> > run.log 2>&1`
 6. 提取指标：`grep "^avg_token_cost:\|^pass_rate:" run.log`
