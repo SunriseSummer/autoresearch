@@ -1,0 +1,1 @@
+{"task_id":"knowledge_003","input":"What is the capital of France?","expected":"Paris","evaluator":"contains","metadata":{"category":"knowledge","difficulty":"easy"}}

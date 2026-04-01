@@ -1,0 +1,1 @@
+{"task_id":"code_008","input":"Write a Python function that returns the factorial of n. Only provide the function definition.","expected":["def ","factorial"],"evaluator":"contains","metadata":{"category":"code","difficulty":"medium"}}

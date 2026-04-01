@@ -1,0 +1,1 @@
+{"task_id":"math_002","input":"What is the square root of 144?","expected":"12","evaluator":"contains","metadata":{"category":"math","difficulty":"easy"}}

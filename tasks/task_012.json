@@ -1,0 +1,1 @@
+{"task_id":"logic_012","input":"Sort these numbers ascending: 42, 17, 83, 5, 61","expected":["5","17","42","61","83"],"evaluator":"contains","metadata":{"category":"logic","difficulty":"easy"}}

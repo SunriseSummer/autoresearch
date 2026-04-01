@@ -1,0 +1,1 @@
+{"task_id":"math_001","input":"What is 15 * 23?","expected":"345","evaluator":"contains","metadata":{"category":"math","difficulty":"easy"}}

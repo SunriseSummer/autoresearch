@@ -1,0 +1,1 @@
+{"task_id":"translation_007","input":"Translate 'Hello, how are you?' into French.","expected":["Bonjour"],"evaluator":"contains","metadata":{"category":"translation","difficulty":"easy"}}

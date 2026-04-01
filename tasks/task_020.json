@@ -1,0 +1,1 @@
+{"task_id":"logic_020","input":"What comes next in this sequence: 2, 4, 8, 16, ?","expected":"32","evaluator":"contains","metadata":{"category":"logic","difficulty":"easy"}}

@@ -1,0 +1,1 @@
+{"task_id":"math_011","input":"What is 7 + 8 * 3?","expected":"31","evaluator":"contains","metadata":{"category":"math","difficulty":"easy"}}

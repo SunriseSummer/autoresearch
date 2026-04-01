@@ -1,0 +1,1 @@
+{"task_id":"knowledge_005","input":"How many planets are in our solar system?","expected":"8","evaluator":"contains","metadata":{"category":"knowledge","difficulty":"easy"}}

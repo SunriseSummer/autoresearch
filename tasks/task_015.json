@@ -1,0 +1,1 @@
+{"task_id":"translation_015","input":"Translate 'Thank you' into Japanese using romaji.","expected":["arigatou"],"evaluator":"contains","metadata":{"category":"translation","difficulty":"easy"}}
