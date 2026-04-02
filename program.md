@@ -70,7 +70,7 @@ grep "^avg_token_cost:\|^pass_rate:" run.log
 表头和 5 列：
 
 ```
-commitavg_token_costpass_ratestatusdescription
+commit	avg_token_cost	pass_rate	status	description
 ```
 
 1. git commit hash（短格式，7 字符）

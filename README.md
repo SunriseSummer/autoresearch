@@ -89,3 +89,37 @@ my-task/
 ```bash
 uv run pytest tests/
 ```
+
+## 输出格式
+
+评估完成后输出如下格式：
+
+```
+---
+task_dir:           /path/to/task
+agent:              opencode
+avg_token_cost:     1200.0
+pass_rate:          1.0000
+total_tokens:       1200
+num_runs:           1
+num_passed:         1
+token_limit:        5000
+timeout:            300
+  run_1: PASS tokens=1200 duration=45.3s
+```
+
+从日志提取关键指标：
+
+```bash
+grep "^avg_token_cost:\|^pass_rate:" run.log
+```
+
+## 评估指标
+
+| 指标 | 说明 |
+|---|---|
+| `avg_token_cost` | 平均每次任务的 Token 消耗（主指标，越低越好） |
+| `pass_rate` | 任务通过率（硬约束，必须 >= 0.9） |
+| `total_tokens` | 所有运行的 Token 总消耗 |
+| `num_runs` | 评估运行总次数 |
+| `num_passed` | 通过的运行次数 |

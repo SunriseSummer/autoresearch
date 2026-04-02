@@ -37,7 +37,7 @@ import subprocess
 import sys
 import time
 import argparse
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 # ---------------------------------------------------------------------------
