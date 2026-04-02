@@ -9,9 +9,9 @@
 
 - **默认使用 opencode** 作为 agent 工具执行任务
 - **任务目录结构**：`task.md` + `.agents/skills/` — 用户提前准备好
-- **支持多 Skills**：可同时优化多个 Skill 文件
 - **Token 上限**：可设置每次任务的 Token 上限，超出即判定失败
 - **API KEY 隔离**：框架自身 API KEY 与 opencode 使用的 AI 服务完全分离
+- **职责清晰**：harness.py 只评估任务执行效果，Skill 文件的分析和优化由上层 agent 处理
 
 ## 快速开始
 
@@ -41,26 +41,24 @@ my-task/
 ├── task.md                    # 任务描述（必须，只读）
 └── .agents/
     └── skills/
-        ├── coding.md          # 顶层 Skill（被优化对象）
+        ├── coding.md          # Skill 文件（由上层 agent 管理和优化）
         ├── review/
         │   └── SKILL.md       # 子目录中的 Skill
-        └── vendor/
-            └── shared.md      # 可通过 --exclude-skills 排除
+        └── ...
 ```
 
 - `task.md`：描述要完成的任务
-- `.agents/skills/` 下各层目录中的 `.md` 文件：opencode 自动加载的 Skill 文件，也是优化 Agent 唯一修改的目标
-- 框架递归扫描 `.agents/skills/` 全部子目录，发现所有 `.md` 文件
-- 可通过 `--exclude-skills` 排除不需要优化的文件/目录（不影响 opencode 的加载机制）
+- `.agents/skills/` 下的 `.md` 文件：opencode 自动加载的 Skill 文件，由上层 agent 自行分析和优化
+- harness.py 不统计或跟踪 Skill 文件，只评估任务执行效果
 
 ## 项目结构
 
 | 文件 | 角色 | 修改者 |
 |---|---|---|
-| `harness.py` | 评估框架：调用 opencode 执行任务，度量 token（只读） | 无 |
+| `harness.py` | 评估框架：调用 opencode 执行任务，评估 token 消耗和通过率（只读） | 无 |
 | `program.md` | 优化 Agent 的行为指令 | 人类 |
 | `<task-dir>/task.md` | 任务描述（只读） | 用户提前准备 |
-| `<task-dir>/.agents/skills/` | Skill 文件（被优化对象） | 优化 Agent |
+| `<task-dir>/.agents/skills/` | Skill 文件（由上层 agent 分析和优化） | 优化 Agent |
 
 ## 与原始 autoresearch 的映射
 
@@ -85,7 +83,6 @@ my-task/
 | Token 上限 | `--token-limit` | `HARNESS_TOKEN_LIMIT` | `0`（无限制） |
 | 超时秒数 | `--timeout` | `HARNESS_TIMEOUT` | `300` |
 | 任务目录 | `--task-dir` | — | `.`（当前目录） |
-| 排除 Skills | `--exclude-skills` | `HARNESS_EXCLUDE_SKILLS`（逗号分隔） | 无 |
 
 ## 测试
 

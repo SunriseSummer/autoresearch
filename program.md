@@ -10,7 +10,7 @@
 2. **创建分支**：`git checkout -b autoresearch-skill/<tag>`
 3. **阅读上下文文件**：
    - `README.md` — 项目说明
-   - `harness.py` — 只读评估框架（调用 opencode 执行任务，评估 token 消耗）。不可修改。
+   - `harness.py` — 只读评估框架（调用 opencode 执行任务，评估 token 消耗和通过率）。不可修改。
    - `<task-dir>/task.md` — 任务描述（只读）
    - `<task-dir>/.agents/skills/` — 你唯一修改的目标：Skill 文件（支持多个）
 4. **确认 opencode 已配置**：用户应预先配置好 opencode 的 AI 服务。框架不管 opencode 的配置。
@@ -47,10 +47,6 @@
 ---
 task_dir:           /path/to/task
 agent:              opencode
-num_skills:         2
-skills_total_chars: 850
-  skill: coding.md (500 chars)
-  skill: review.md (350 chars)
 avg_token_cost:     1200.0
 pass_rate:          1.0000
 total_tokens:       1200
