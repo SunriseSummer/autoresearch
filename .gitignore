@@ -1,23 +1,29 @@
-# Python-generated files
+# Python 生成文件
 __pycache__/
 *.py[oc]
 build/
 dist/
 wheels/
 *.egg-info
+.pytest_cache/
 
-# Virtual environments
+# 虚拟环境
 .venv
+
+# Agent 提示文件
+CLAUDE.md
+AGENTS.md
+
+# 实验产物
+dev/
 worktrees/
 results/
 queue/
 
-# Agent prompt files (generated per-session by launchers)
-CLAUDE.md
-AGENTS.md
-
-# Experimental code/artifacts
-dev/
-
-# Results file
+# 结果文件和日志
 results.tsv
+run.log
+*.log
+
+# uv 锁文件
+uv.lock
