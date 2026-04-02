@@ -69,11 +69,6 @@ my-task/
 | 5 分钟 GPU 时间预算 | Token 上限 / 固定任务 |
 | VRAM 约束 | `pass_rate >= 0.9` 质量门控 |
 
-## API KEY 说明
-
-- **框架 API KEY**（`OPENAI_API_KEY` 等）：仅用于框架自身（如 LLM 评估判断），与 opencode 无关
-- **opencode AI 服务**：由用户自行在 opencode 中配置，框架只负责调用 `opencode` 命令
-
 ## 配置
 
 | 参数 | CLI 参数 | 环境变量 | 默认值 |
