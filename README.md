@@ -10,7 +10,6 @@
 - **默认使用 opencode** 作为 agent 工具执行任务
 - **任务目录结构**：`task.md` + `.agents/skills/` — 用户提前准备好
 - **Token 上限**：可设置每次任务的 Token 上限，超出即判定失败
-- **API KEY 隔离**：框架自身 API KEY 与 opencode 使用的 AI 服务完全分离
 - **职责清晰**：harness.py 只评估任务执行效果，Skill 文件的分析和优化由上层 agent 处理
 
 ## 快速开始
